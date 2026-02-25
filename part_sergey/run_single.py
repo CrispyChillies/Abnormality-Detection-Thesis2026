@@ -19,7 +19,7 @@ def load_model(weights, device):
     else:
         # fallback: try loading with YOLOv5 loader
         from models.experimental import attempt_load
-        model = attempt_load(weights, map_location=device)
+        model = attempt_load(weights, map_location=device, weights_only=False)
     model.to(device).eval()
     return model
 
