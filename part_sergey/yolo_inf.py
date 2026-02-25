@@ -134,7 +134,29 @@ def detect1Image(im0, imgsz, model, device, conf_thres, iou_thres):
         img = img.unsqueeze(0)
 
     # Inference
-    pred = model(img, augment=False)[0]
+    pred, raw_outputs = model(img, augment=False)
+    branch_preds = []
+    for branch_id, branch_out in enumerate(raw_outputs):
+        # branch_out shape: [B, anchors, grid_h, grid_w, 5+num_classes]
+        
+        bs, na, gh, gw, nc = branch_out.shape
+        
+        # flatten về [num_predictions, 5+num_classes]
+        branch_out = branch_out.view(bs, -1, nc)
+        
+        # thêm branch id vào cuối tensor
+        branch_id_tensor = torch.full(
+            (branch_out.shape[0], branch_out.shape[1], 1),
+            branch_id,
+            device=branch_out.device
+        )
+        
+        branch_out = torch.cat([branch_out, branch_id_tensor], dim=2)
+        
+        branch_preds.append(branch_out)
+
+    # concat tất cả branch
+    pred_with_branch = torch.cat(branch_preds, dim=1)
 
     # Apply NMS
     pred = non_max_suppression(pred, conf_thres, iou_thres)
@@ -142,19 +164,24 @@ def detect1Image(im0, imgsz, model, device, conf_thres, iou_thres):
     boxes = []
     scores = []
     labels = []
+    branch_ids = []
+    boxes_resized = []
     for i, det in enumerate(pred):  # detections per image
         # save_path = 'draw/' + image_id + '.jpg'
         if det is not None and len(det):
             # Rescale boxes from img_size to im0 size
+            det_scaled = det.clone()  # giữ lại bản resized coordinate
             det[:, :4] = scale_coords(img.shape[2:], det[:, :4], im0.shape).round()
 
             # Write results
-            for *xyxy, conf, cls in det:
+            for *xyxy, conf, cls, branch in det:
                 boxes.append([int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3])])
+                boxes_resized.append(det_scaled[j][:4].cpu().numpy())
                 scores.append(float(conf))
                 labels.append(int(cls))
+                branch_ids.append(int(branch))
 
-    return np.array(boxes), np.array(scores), np.array(labels)
+    return np.array(boxes), np.array(scores), np.array(labels), np.array(branch_ids), boxes_resized
 
 def format_prediction_string(boxes, scores, labels):
     pred_strings = []

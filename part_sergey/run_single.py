@@ -61,11 +61,36 @@ def main():
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     model = load_model(opt.weights, device)
 
+    features = {}
+
+    def get_hook(name):
+        def hook(module, input, output):
+            features[name] = output
+        return hook
+
+    # Based on your printed architecture:
+    model.model[17].register_forward_hook(get_hook("small"))
+    model.model[20].register_forward_hook(get_hook("medium"))
+    model.model[23].register_forward_hook(get_hook("large"))
+
+
     # try to get class names from model (if available)
     try:
         names = model.module.names if hasattr(model, 'module') else model.names
     except Exception:
         names = [str(i) for i in range(100)]
+
+    stride_map = {
+        0: 8,   # small
+        1: 16,  # medium
+        2: 32   # large
+    }
+
+    branch_name_map = {
+        0: "small",
+        1: "medium",
+        2: "large"
+    }
 
     for img_path in opt.images:
         print('Processing', img_path)
@@ -75,12 +100,50 @@ def main():
             continue
 
         padded = pad_to_square_and_rgb(img)
-        boxes, scores, labels = yolo_inf.detect1Image(padded, opt.img_size, model, device, opt.conf_thres, opt.iou_thres)
+        boxes, scores, labels, branch, boxes_resized = yolo_inf.detect1Image(padded, opt.img_size, model, device, opt.conf_thres, opt.iou_thres)
+        for k in features:
+            print(f"{k} feature shape:", features[k].shape)
 
         print(f'  Found {len(boxes)} boxes')
         for b, s, l in zip(boxes, scores, labels):
             print('   ', int(l), f'{s:.3f}', list(map(int, b)))
 
+        lesion_features = []
+
+        for i, box in enumerate(boxes_resized):
+            x1, y1, x2, y2 = box
+            branch_id = int(branch[i])
+
+            cx = (x1 + x2) / 2.0
+            cy = (y1 + y2) / 2.0
+
+            stride = stride_map[branch_id]
+            branch_name = branch_name_map[branch_id]
+
+            # grid cell đúng chuẩn YOLO
+            gx = int(cx / stride)
+            gy = int(cy / stride)
+
+            fmap = features[branch_name][0]  # remove batch dim
+            C, H, W = fmap.shape
+
+            gx = np.clip(gx, 0, W - 1)
+            gy = np.clip(gy, 0, H - 1)
+
+            vec = fmap[:, gy, gx]
+
+            # Normalize (rất quan trọng cho retrieval)
+            vec = torch.nn.functional.normalize(vec, dim=0)
+
+            lesion_features.append({
+                "bbox": box,
+                "branch_id": branch_id,
+                "branch_name": branch_name,
+                "feature": vec.detach().cpu()
+            })
+
+            print(f"  Feature dim ({branch_name}):", vec.shape)
+        print(lesion_features)
         out_file = os.path.join(opt.out, os.path.basename(img_path))
         # save visualization on padded image (quick debug)
         padded_bgr = cv2.cvtColor(padded, cv2.COLOR_RGB2BGR)
