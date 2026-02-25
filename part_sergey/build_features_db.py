@@ -189,11 +189,11 @@ def main():
             "params": {"nlist": 1024}
         }
 
-        collection.create_index(
-            field_name="embedding",
+        result = collection.create_index(
+            field_name="vector",
             index_params=index_params
         )
-
+        print("Index creation result:", result)
         print("Index created.")
     else:
         print("Index already exists.")
