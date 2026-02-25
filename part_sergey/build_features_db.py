@@ -47,7 +47,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--weights", required=True)
     parser.add_argument("--image_dir", required=True)
-    parser.add_argument("--image_list", required=True)  # train.txt
+    parser.add_argument("--annotation_csv", required=True)
     parser.add_argument("--img_size", type=int, default=640)
     parser.add_argument("--conf", type=float, default=0.1)
     parser.add_argument("--iou", type=float, default=0.4)
@@ -76,10 +76,14 @@ def main():
     # =============================
     # Load image list
     # =============================
-    with open(opt.image_list) as f:
-        image_list = f.read().splitlines()
+    import pandas as pd
 
-    print(f"Total images: {len(image_list)}")
+    df = pd.read_csv(opt.annotation_csv)
+
+    # Lấy unique image_id
+    image_list = df["image_id"].unique().tolist()
+
+    print(f"Total unique images from CSV: {len(image_list)}")
 
     batch_image_ids = []
     batch_branch_ids = []
@@ -94,6 +98,8 @@ def main():
     for img_name in tqdm(image_list):
 
         img_path = os.path.join(opt.image_dir, img_name)
+        if not os.path.exists(img_path):
+            img_path = os.path.join(opt.image_dir, img_name + ".png")
 
         img = cv2.imread(img_path)
         if img is None:
@@ -173,6 +179,24 @@ def main():
         total_inserted += len(batch_vectors)
 
     print(f"Finished. Total inserted: {total_inserted}")
+
+    if len(collection.indexes) == 0:
+        print("Creating index...")
+
+        index_params = {
+            "index_type": "IVF_FLAT",
+            "metric_type": "IP",
+            "params": {"nlist": 1024}
+        }
+
+        collection.create_index(
+            field_name="embedding",
+            index_params=index_params
+        )
+
+        print("Index created.")
+    else:
+        print("Index already exists.")
 
 
 if __name__ == "__main__":
