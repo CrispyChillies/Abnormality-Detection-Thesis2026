@@ -174,7 +174,7 @@ def detect1Image(im0, imgsz, model, device, conf_thres, iou_thres):
             det[:, :4] = scale_coords(img.shape[2:], det[:, :4], im0.shape).round()
 
             # Write results
-            for *xyxy, conf, cls, branch in det:
+            for j, (*xyxy, conf, cls, branch) in enumerate(det):
                 boxes.append([int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3])])
                 boxes_resized.append(det_scaled[j][:4].cpu().numpy())
                 scores.append(float(conf))

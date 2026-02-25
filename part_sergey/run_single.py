@@ -131,8 +131,7 @@ def main():
             gy = np.clip(gy, 0, H - 1)
 
             vec = fmap[:, gy, gx]
-
-            # Normalize (rất quan trọng cho retrieval)
+            # Normalize
             vec = torch.nn.functional.normalize(vec, dim=0)
 
             lesion_features.append({
