@@ -10,17 +10,17 @@ import argparse
 import yolo_inf
 from run_single import load_model, pad_to_square_and_rgb
 from dotenv import load_dotenv
+from kaggle_secrets import UserSecretsClient
+
+user_secrets = UserSecretsClient()
 
 
 # =============================
 # CONFIG
 # =============================
-
-load_dotenv()
-
-MILVUS_URI = os.getenv("MILVUS_URI")
-MILVUS_TOKEN = os.getenv("MILVUS_TOKEN")
-COLLECTION_NAME = os.getenv("COLLECTION_NAME")
+MILVUS_URI = user_secrets.get_secret("MILVUS_URI")
+MILVUS_TOKEN = user_secrets.get_secret("MILVUS_TOKEN")
+COLLECTION_NAME = user_secrets.get_secret("COLLECTION_NAME")
 
 VECTOR_DIM = 320
 BATCH_SIZE = 128
