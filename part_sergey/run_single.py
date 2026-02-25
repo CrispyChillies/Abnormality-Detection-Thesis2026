@@ -13,13 +13,13 @@ import yolo_inf
 
 
 def load_model(weights, device):
-    ckpt = torch.load(weights, map_location=device)
+    ckpt = torch.load(weights, map_location=device, weights_only=False)
     if isinstance(ckpt, dict) and 'model' in ckpt:
         model = ckpt['model'].float()
     else:
         # fallback: try loading with YOLOv5 loader
         from models.experimental import attempt_load
-        model = attempt_load(weights, map_location=device, weights_only=False)
+        model = attempt_load(weights, map_location=device)
     model.to(device).eval()
     return model
 
