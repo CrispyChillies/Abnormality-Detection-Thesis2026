@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import os
 import cv2
 import torch
@@ -15,47 +14,33 @@ from kaggle_secrets import UserSecretsClient
 
 
 # =============================
-# MAPPING CLASSES TO GROUPS
+# MAPPING DICTIONARIES
 # =============================
-# Dựa trên bảng định nghĩa và danh sách class
-CLASS_TO_GROUP = {
-    0: "AoE",  # Aortic enlargement
-    1: "PaL",  # Atelectasis
-    2: "PaL",  # Calcification
-    3: "Cmg",  # Cardiomegaly
-    4: "PaL",  # Consolidation
-    5: "PaL",  # ILD
-    6: "PaL",  # Infiltration
-    7: "PaL",  # Lung Opacity
-    8: "PaL",  # Nodule/Mass
-    9: "OtL",  # Other lesion
-    10: "PlL", # Pleural effusion
-    11: "PlL", # Pleural thickening
-    12: "Pnm", # Pneumothorax
-    13: "PaL"  # Pulmonary fibrosis
-}
-
-TARGET_CC_GROUPS = ["PaL", "PlL"]
-
 NAME_TO_CLASS_ID = {
-    "Aortic enlargement": 0,
-    "Atelectasis": 1,
-    "Calcification": 2,
-    "Cardiomegaly": 3,
-    "Consolidation": 4,
-    "ILD": 5,
-    "Infiltration": 6,
-    "Lung Opacity": 7,
-    "Nodule/Mass": 8,
-    "Other lesion": 9,
-    "Pleural effusion": 10,
-    "Pleural thickening": 11,
-    "Pneumothorax": 12,
+    "Aortic enlargement": 0, "Atelectasis": 1, "Calcification": 2,
+    "Cardiomegaly": 3, "Consolidation": 4, "ILD": 5, "Infiltration": 6,
+    "Lung Opacity": 7, "Nodule/Mass": 8, "Other lesion": 9,
+    "Pleural effusion": 10, "Pleural thickening": 11, "Pneumothorax": 12,
     "Pulmonary fibrosis": 13
 }
 
+CLASS_TO_GROUP = {
+    0: "AoE", 1: "PaL", 2: "PaL", 3: "Cmg", 4: "PaL", 5: "PaL",
+    6: "PaL", 7: "PaL", 8: "PaL", 9: "OtL", 10: "PlL", 11: "PlL",
+    12: "Pnm", 13: "PaL"
+}
+
+# Ánh xạ ID sang tên viết tắt để in giống biểu đồ trong paper
+CLASS_ID_TO_ABBR = {
+    1: "Atl", 2: "Clc", 4: "Cns", 5: "ILD", 6: "Inf", 
+    7: "LOp", 8: "Nod", 13: "PuF", 10: "PlE", 11: "PlT"
+}
+
+TARGET_CC_GROUPS = ["PaL", "PlL"]
+ALL_GROUPS = ["AoE", "Cmg", "PaL", "OtL", "PlL", "Pnm"]
+
 # =============================
-# IoU
+# IoU & Hooks
 # =============================
 def compute_iou(box1, box2):
     x1 = max(box1[0], box2[0])
@@ -70,10 +55,6 @@ def compute_iou(box1, box2):
 
     return inter / union if union > 0 else 0
 
-
-# =============================
-# Hook
-# =============================
 def register_hooks(model, features_dict):
     def get_hook(name):
         def hook(module, input, output):
@@ -97,11 +78,10 @@ def main():
     parser.add_argument("--conf", type=float, default=0.1)
     parser.add_argument("--iou", type=float, default=0.4)
     parser.add_argument("--topk", type=int, default=5)
-    parser.add_argument("--metric", type=str, default="IP")  # IP or L2
+    parser.add_argument("--metric", type=str, default="IP") 
     opt = parser.parse_args()
 
     user_secrets = UserSecretsClient()
-
     MILVUS_URI = user_secrets.get_secret("MILVUS_URI")
     MILVUS_TOKEN = user_secrets.get_secret("MILVUS_TOKEN")
     COLLECTION_NAME = user_secrets.get_secret("COLLECTION_NAME")
@@ -128,17 +108,17 @@ def main():
         img = row["image_id"]
         box = [row["x_min"], row["y_min"], row["x_max"], row["y_max"]]
         
-        # Chuyển đổi an toàn: Nếu có class_id thì lấy luôn, không thì tra từ điển
         if "class_id" in row and pd.notna(row["class_id"]):
             label = int(row["class_id"])
+            if label == 14: # Bỏ qua No finding
+                continue
         else:
             class_name = str(row["class_name"]).strip()
-            # Bắt lỗi nếu tên trong CSV hơi khác một chút (ví dụ có khoảng trắng)
+            if class_name == "No finding":
+                continue
             label = NAME_TO_CLASS_ID.get(class_name, -1) 
 
-        # Bỏ qua những row không xác định được label
         if label == -1:
-            print(f"Warning: Unknown class name '{class_name}' in image {img}")
             continue
 
         if img not in gt_dict:
@@ -146,39 +126,34 @@ def main():
         gt_dict[img].append({"bbox": box, "label": label})
 
     image_list = df["image_id"].unique().tolist()
+    search_params = {"metric_type": opt.metric, "params": {"nprobe": 10}}
 
-    search_params = {
-        "metric_type": opt.metric,
-        "params": {"nprobe": 10}
-    }
+    # TẠO DICTIONARY ĐỂ LƯU KẾT QUẢ THEO TỪNG NHÓM VÀ LỚP
+    rp5_per_group = {g: [] for g in ALL_GROUPS}
+    cc5_per_class = {c: [] for c in CLASS_ID_TO_ABBR.keys()}
 
-    rp1_list = []
-    rp5_list = []
-    cc1_list = []
-    cc5_list = []
+    # Biến lưu tổng thể
+    rp1_list, rp5_list = [], []
+    cc1_list, cc5_list = [], []
 
     print("Starting evaluation...")
 
     for img_name in tqdm(image_list):
-
         img_path = os.path.join(opt.image_dir, img_name)
         if not os.path.exists(img_path):
             img_path = os.path.join(opt.image_dir, img_name + ".png")
 
         img = cv2.imread(img_path)
-        if img is None:
-            continue
+        if img is None: continue
 
         padded = pad_to_square_and_rgb(img)
-
-        # YOLO Inference
         boxes, scores, labels, branch_ids, boxes_resized = yolo_inf.detect1Image(
             padded, opt.img_size, model, device, opt.conf, opt.iou
         )
 
         for i, box in enumerate(boxes_resized):
             
-            # --- BƯỚC 1: XÁC ĐỊNH GROUND TRUTH VÀ NHÃN CHUẨN CỦA VÙNG DỰ ĐOÁN ---
+            # 1. TÌM GROUND TRUTH
             matched_gt_label = None
             max_box_iou = 0
             
@@ -189,88 +164,93 @@ def main():
                         max_box_iou = iou_val
                         matched_gt_label = gt["label"]
 
-            # Nếu box dự đoán không khớp GT nào (IoU < 0.4), bỏ qua (không thể đánh giá retrieval)
             if matched_gt_label is None:
                 continue
 
-            # Xác định Nhóm và Lớp bệnh lý chuẩn của truy vấn
             gt_class = int(matched_gt_label)
             gt_group = CLASS_TO_GROUP.get(gt_class)
 
-            # --- BƯỚC 2: TRÍCH XUẤT FEATURE VÀ TÌM KIẾM TRÊN MILVUS ---
+            # 2. TRÍCH XUẤT FEATURE VÀ MILVUS
             branch_id = int(branch_ids[i])
             branch_name = branch_name_map[branch_id]
             stride = stride_map[branch_id]
-
             x1, y1, x2, y2 = box
-            cx = (x1 + x2) / 2.0
-            cy = (y1 + y2) / 2.0
-
-            gx = int(cx / stride)
-            gy = int(cy / stride)
+            cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+            gx, gy = int(cx / stride), int(cy / stride)
 
             fmap = features[branch_name][0]
             C, H, W = fmap.shape
-
-            gx = np.clip(gx, 0, W - 1)
-            gy = np.clip(gy, 0, H - 1)
+            gx, gy = np.clip(gx, 0, W - 1), np.clip(gy, 0, H - 1)
 
             vec = fmap[:, gy, gx]
-            vec = torch.nn.functional.normalize(vec, dim=0)
-            vec = vec.detach().cpu().numpy()
+            vec = torch.nn.functional.normalize(vec, dim=0).detach().cpu().numpy()
 
             results = collection.search(
-                data=[vec],
-                anns_field="vector",
-                param=search_params,
-                limit=opt.topk,
-                output_fields=["label"]
+                data=[vec], anns_field="vector", param=search_params,
+                limit=opt.topk, output_fields=["label"]
             )
-
             retrieved = results[0]
 
-            # --- BƯỚC 3: ĐÁNH GIÁ RP VÀ CC DỰA TRÊN KẾT QUẢ MILVUS TRẢ VỀ ---
-            correct_rp_1 = 0
-            correct_rp_5 = 0
-            correct_cc_1 = 0
-            correct_cc_5 = 0
+            # 3. ĐÁNH GIÁ RP VÀ CC
+            correct_rp_1 = correct_rp_5 = 0
+            correct_cc_1 = correct_cc_5 = 0
 
             for rank, r in enumerate(retrieved):
                 retrieved_class = int(r.entity.get("label"))
                 retrieved_group = CLASS_TO_GROUP.get(retrieved_class)
 
-                # RP5: Tính dựa trên cùng NHÓM bệnh (Pathology Group)
                 if retrieved_group == gt_group:
                     correct_rp_5 += 1
-                    if rank == 0:
-                        correct_rp_1 = 1
+                    if rank == 0: correct_rp_1 = 1
 
-                # CC5: Tính dựa trên cùng LỚP bệnh chi tiết (Pathology Class)
                 if retrieved_class == gt_class:
                     correct_cc_5 += 1
-                    if rank == 0:
-                        correct_cc_1 = 1
+                    if rank == 0: correct_cc_1 = 1
 
-            # Lưu kết quả tính RP cho tất cả các nhóm
+            # Lưu RP5 chung và RP5 riêng cho Group đó
+            rp5_val = correct_rp_5 / opt.topk
             rp1_list.append(correct_rp_1)
-            rp5_list.append(correct_rp_5 / opt.topk)
+            rp5_list.append(rp5_val)
+            if gt_group in rp5_per_group:
+                rp5_per_group[gt_group].append(rp5_val)
 
-            # Lưu kết quả tính CC CHỈ CHO nhóm PaL và PlL
+            # Lưu CC5 chung và CC5 riêng cho Class đó (chỉ PaL, PlL)
             if gt_group in TARGET_CC_GROUPS:
+                cc5_val = correct_cc_5 / opt.topk
                 cc1_list.append(correct_cc_1)
-                cc5_list.append(correct_cc_5 / opt.topk)
+                cc5_list.append(cc5_val)
+                if gt_class in cc5_per_class:
+                    cc5_per_class[gt_class].append(cc5_val)
 
-    print("\n===== FINAL RESULTS =====")
-    print(f"Total valid queries evaluated: {len(rp1_list)}")
-    print(f"RP@1 (Group Match): {np.mean(rp1_list):.4f}")
-    print(f"RP@5 (Group Match): {np.mean(rp5_list):.4f}")
+    # =============================
+    # IN KẾT QUẢ THEO FORMAT PAPER
+    # =============================
+    print("\n" + "="*40)
+    print("FINAL RESULTS (OVERALL)")
+    print("="*40)
+    print(f"Total valid queries: {len(rp1_list)}")
+    print(f"Overall RP@5: {np.mean(rp5_list):.4f}")
+    if len(cc5_list) > 0:
+        print(f"Overall CC@5: {np.mean(cc5_list):.4f}")
 
-    if len(cc1_list) > 0:
-        print(f"\nTotal valid queries evaluated for CC metric (PaL, PlL only): {len(cc1_list)}")
-        print(f"CC@1 (Class Match): {np.mean(cc1_list):.4f}")
-        print(f"CC@5 (Class Match): {np.mean(cc5_list):.4f}")
-    else:
-        print("\nNo GT matched lesions belonging to PaL or PlL groups for CC metric.")
+    print("\n" + "="*40)
+    print("RETRIEVAL PRECISION (RP5) PER GROUP")
+    print("="*40)
+    for g in ALL_GROUPS:
+        vals = rp5_per_group[g]
+        mean_val = np.mean(vals) if len(vals) > 0 else 0.0
+        print(f"{g:<5} | RP5: {mean_val:.4f} | (Queries: {len(vals)})")
+
+    print("\n" + "="*40)
+    print("CLASS CONSISTENCY (CC5) PER CLASS")
+    print("="*40)
+    # Lấy thứ tự in giống y hệt biểu đồ trong paper
+    ordered_cc_classes = [1, 2, 4, 5, 6, 7, 8, 13, 10, 11] 
+    for c_id in ordered_cc_classes:
+        abbr = CLASS_ID_TO_ABBR[c_id]
+        vals = cc5_per_class[c_id]
+        mean_val = np.mean(vals) if len(vals) > 0 else 0.0
+        print(f"{abbr:<5} | CC5: {mean_val:.4f} | (Queries: {len(vals)})")
 
 if __name__ == "__main__":
     main()
