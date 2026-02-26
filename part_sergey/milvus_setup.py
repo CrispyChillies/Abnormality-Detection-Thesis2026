@@ -37,8 +37,9 @@ fields = [
 schema = CollectionSchema(fields)
 
 collection = Collection(
-    name="vindr_lesion_features",
+    name=COLLECTION_NAME,
     schema=schema
 )
 
 print("Collection created.")
+

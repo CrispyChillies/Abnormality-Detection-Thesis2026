@@ -61,6 +61,8 @@ def main():
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     model = load_model(opt.weights, device)
 
+    print(model)
+
     features = {}
 
     def get_hook(name):
