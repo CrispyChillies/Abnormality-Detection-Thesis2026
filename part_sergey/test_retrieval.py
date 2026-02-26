@@ -37,6 +37,23 @@ CLASS_TO_GROUP = {
 
 TARGET_CC_GROUPS = ["PaL", "PlL"]
 
+NAME_TO_CLASS_ID = {
+    "Aortic enlargement": 0,
+    "Atelectasis": 1,
+    "Calcification": 2,
+    "Cardiomegaly": 3,
+    "Consolidation": 4,
+    "ILD": 5,
+    "Infiltration": 6,
+    "Lung Opacity": 7,
+    "Nodule/Mass": 8,
+    "Other lesion": 9,
+    "Pleural effusion": 10,
+    "Pleural thickening": 11,
+    "Pneumothorax": 12,
+    "Pulmonary fibrosis": 13
+}
+
 # =============================
 # IoU
 # =============================
@@ -110,7 +127,19 @@ def main():
     for _, row in df.iterrows():
         img = row["image_id"]
         box = [row["x_min"], row["y_min"], row["x_max"], row["y_max"]]
-        label = int(row["class_id"]) if "class_id" in row else row["class_name"]
+        
+        # Chuyển đổi an toàn: Nếu có class_id thì lấy luôn, không thì tra từ điển
+        if "class_id" in row and pd.notna(row["class_id"]):
+            label = int(row["class_id"])
+        else:
+            class_name = str(row["class_name"]).strip()
+            # Bắt lỗi nếu tên trong CSV hơi khác một chút (ví dụ có khoảng trắng)
+            label = NAME_TO_CLASS_ID.get(class_name, -1) 
+
+        # Bỏ qua những row không xác định được label
+        if label == -1:
+            print(f"Warning: Unknown class name '{class_name}' in image {img}")
+            continue
 
         if img not in gt_dict:
             gt_dict[img] = []
