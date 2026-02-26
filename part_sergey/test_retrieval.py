@@ -154,7 +154,7 @@ def main():
 
             results = collection.search(
                 data=[vec],
-                anns_field="embedding",
+                anns_field="vector",
                 param=search_params,
                 limit=opt.topk,
                 output_fields=["label"]
